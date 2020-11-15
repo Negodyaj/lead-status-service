@@ -1,14 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Diagnostics;
 using System.IO;
-using System.Linq;
+using System.Net.Http;
 using System.ServiceProcess;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
+using System.Timers;
+using Timer = System.Timers.Timer;
 
 namespace LeadStatusUpdater
 {
@@ -26,83 +22,61 @@ namespace LeadStatusUpdater
         protected override void OnStart(string[] args)
         {
             logger = new Logger();
-            Thread loggerThread = new Thread(new ThreadStart(logger.Start));
-            loggerThread.Start();
+            logger.Start();
         }
 
         protected override void OnStop()
         {
             logger.Stop();
-            Thread.Sleep(1000);
         }
     }
 
     class Logger
     {
-        FileSystemWatcher watcher;
-        object obj = new object();
-        bool enabled = true;
+        Timer timer;
+        HttpClient _httpClient;        
         public Logger()
         {
-            watcher = new FileSystemWatcher("F:\\Temp");
-            watcher.Deleted += Watcher_Deleted;
-            watcher.Created += Watcher_Created;
-            watcher.Changed += Watcher_Changed;
-            watcher.Renamed += Watcher_Renamed;
-        }
+            var httpClientHandler = new HttpClientHandler();
+            httpClientHandler.ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+            _httpClient = new HttpClient(httpClientHandler)
+            {
+                BaseAddress = new Uri("https://localhost:44394/api/Lead/")
+            };
 
+           // _httpClient = new HttpClient();
+            //client.BaseAddress = new Uri("https://localhost:44394/api/Lead/");            
+
+            timer = new Timer(5000);
+            timer.Elapsed += CheckLeadStatusAndUpdate;
+            timer.AutoReset = true;
+            timer.Enabled = true;
+        }      
+        public void  CheckLeadStatusAndUpdate(object source = null, ElapsedEventArgs e = null)
+        {
+            var response =  _httpClient.GetAsync("UpdateAllStates");
+            var result = response.Result.Content.ReadAsStringAsync().Result;
+            RecordEntry(result);
+        }
         public void Start()
         {
-            watcher.EnableRaisingEvents = true;
-            while (enabled)
-            {
-                Thread.Sleep(1000);
-            }
-        }
-        public void Stop()
-        {
-            watcher.EnableRaisingEvents = false;
-            enabled = false;
-        }
-        // переименование файлов
-        private void Watcher_Renamed(object sender, RenamedEventArgs e)
-        {
-            string fileEvent = "переименован в " + e.FullPath;
-            string filePath = e.OldFullPath;
-            RecordEntry(fileEvent, filePath);
-        }
-        // изменение файлов
-        private void Watcher_Changed(object sender, FileSystemEventArgs e)
-        {
-            string fileEvent = "изменен";
-            string filePath = e.FullPath;
-            RecordEntry(fileEvent, filePath);
-        }
-        // создание файлов
-        private void Watcher_Created(object sender, FileSystemEventArgs e)
-        {
-            string fileEvent = "создан";
-            string filePath = e.FullPath;
-            RecordEntry(fileEvent, filePath);
-        }
-        // удаление файлов
-        private void Watcher_Deleted(object sender, FileSystemEventArgs e)
-        {
-            string fileEvent = "удален";
-            string filePath = e.FullPath;
-            RecordEntry(fileEvent, filePath);
+            timer.Enabled = true;
+            timer.Start();
         }
 
-        private void RecordEntry(string fileEvent, string filePath)
+        public void Stop()
         {
-            lock (obj)
+            timer.Stop();
+            timer.Enabled = false;
+        }
+        private void RecordEntry( string result)
+        {
+            using (StreamWriter writer = new StreamWriter("F:\\templog.txt", true))
             {
-                using (StreamWriter writer = new StreamWriter("F:\\templog.txt", true))
-                {
-                    writer.WriteLine(string.Format("{0} файл {1} был {2}",
-                        DateTime.Now.ToString("dd/MM/yyyy hh:mm:ss"), filePath, fileEvent));
-                    writer.Flush();
-                }
+                writer.WriteLine(string.Format("Измененые лиды {1}  {0}",
+                    DateTime.Now.ToString("dd/MM/yyyy hh:mm:ss"), result));
+                writer.Flush();
             }
         }
     }
